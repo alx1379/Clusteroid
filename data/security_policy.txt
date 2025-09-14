@@ -1,0 +1,41 @@
+Information Security Policy
+
+1. Purpose
+This policy establishes guidelines for protecting company data and information systems from unauthorized access, use, or disclosure.
+
+2. Scope
+Applies to all employees, contractors, and third parties with access to company systems or data.
+
+3. Access Control
+- Use strong, unique passwords (minimum 12 characters)
+- Enable multi-factor authentication (MFA) on all accounts
+- Access to sensitive data requires explicit approval
+- Regular access reviews will be conducted
+
+4. Data Classification
+- Public: Information approved for public release
+- Internal: General company information
+- Confidential: Sensitive business information
+- Restricted: Highly sensitive data (PII, financial, etc.)
+
+5. Device Security
+- All devices must have endpoint protection
+- Automatic screen locking after 15 minutes of inactivity
+- Regular security updates must be installed
+- Lost or stolen devices must be reported immediately
+
+6. Network Security
+- Use company VPN when accessing internal resources remotely
+- Public Wi-Fi must use VPN
+- Regular network vulnerability scans
+- Firewall protection on all networks
+
+7. Incident Response
+- Report all security incidents to security@company.com
+- Follow incident response procedures
+- Preserve evidence when possible
+
+8. Training
+- Annual security awareness training required
+- Phishing simulation exercises quarterly
+- Specialized training for privileged users

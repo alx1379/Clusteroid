@@ -1,0 +1,31 @@
+Remote Work Policy
+
+1. Eligibility
+All full-time employees who have completed their probationary period are eligible for remote work arrangements. Exceptions may be made on a case-by-case basis with manager approval.
+
+2. Work Hours
+Employees working remotely are expected to be available during core business hours (10:00 AM to 3:00 PM local time). Flexible start and end times outside of core hours are permitted with manager approval.
+
+3. Communication
+All remote employees must:
+- Be available via company chat (Slack/MS Teams) during working hours
+- Attend all scheduled video meetings with camera on
+- Respond to urgent requests within 30 minutes
+- Update their calendar with their working hours and availability
+
+4. Equipment
+- Company will provide a laptop and necessary peripherals
+- Employees must have a reliable internet connection (minimum 50 Mbps download/10 Mbps upload)
+- IT support will be provided remotely during business hours
+
+5. Security
+- All work must be done on company-issued devices
+- Use of VPN is mandatory when accessing company resources
+- No sensitive data should be stored on personal devices
+- All devices must have endpoint protection software installed
+
+6. Performance
+Performance will be evaluated based on deliverables and outcomes rather than hours worked. Regular check-ins with managers are required to ensure alignment with team goals.
+
+7. Office Visits
+Remote employees are expected to visit the office at least once per quarter for team meetings and collaboration. Travel expenses will be covered by the company.

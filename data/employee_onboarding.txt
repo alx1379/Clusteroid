@@ -1,0 +1,36 @@
+Employee Onboarding Process
+
+1. Pre-Start (1-2 weeks before start date)
+- HR will send welcome email with first-day instructions
+- IT will set up necessary accounts and equipment
+- Direct manager will schedule introductory meetings
+
+2. First Day
+- 9:00 AM: Check-in with HR for paperwork and orientation
+- 10:30 AM: IT setup and security briefing
+- 12:00 PM: Team lunch with immediate colleagues
+- 2:00 PM: One-on-one with direct manager
+
+3. First Week
+- Complete mandatory training modules (Security, Compliance, Company Policies)
+- Set up 30-minute intro meetings with team members
+- Review team processes and documentation
+- Schedule regular check-ins with mentor/manager
+
+4. First 30 Days
+- Complete all required training certifications
+- Begin working on initial projects with guidance
+- Attend department meetings and company all-hands
+- 30-day check-in with HR and manager
+
+5. First 90 Days
+- Take on more responsibility in projects
+- Complete any remaining training
+- 90-day performance review
+- Set goals for the next quarter
+
+6. Resources
+- Company handbook (internal wiki)
+- Training portal (LMS)
+- IT helpdesk (helpdesk@company.com)
+- HR contact: hr@company.com
