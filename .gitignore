@@ -6,6 +6,12 @@ __pycache__/
 # chroma_db
 chroma_db/
 
+# docs
+docs/
+
+# DS_Store
+.DS_Store
+
 # C extensions
 *.so
 
