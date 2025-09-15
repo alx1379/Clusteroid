@@ -160,7 +160,7 @@ def print_results(results: Dict[str, Any]) -> None:
     print("-" * 60)
     for i, cluster in enumerate(results['clusters'], 1):
         print(f"{i}. Cluster {cluster['cluster_id']} (Similarity: {cluster['similarity']:.2f})")
-        print(f"   Summary: {cluster['summary'][:150]}...")
+        print(f"   Summary: {cluster['summary']}")
         print(f"   Chunks in cluster: {cluster['num_chunks']}")
         print("-" * 60)
     
@@ -169,7 +169,7 @@ def print_results(results: Dict[str, Any]) -> None:
     print("-" * 60)
     for i, chunk in enumerate(results['results'], 1):
         print(f"{i}. [{chunk['source']}] {chunk['title']} (Cluster: {chunk['cluster_id']}, Similarity: {chunk['similarity']:.2f})")
-        print(f"   {chunk['text'][:200]}...")
+        print(f"   {chunk['text']}")
         print("-" * 60)
 
 def run_demo():
