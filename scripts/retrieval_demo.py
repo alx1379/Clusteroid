@@ -62,12 +62,21 @@ class RAGSystem:
             print(f"Database path: {self.db_path.absolute()}")
             raise
     
-    def get_relevant_clusters(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
-        """Find the most relevant clusters for a query."""
+    def get_relevant_clusters(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
+        """
+        Find the most relevant clusters for a query using the cluster centroids.
+        
+        Args:
+            query: The search query
+            top_k: Maximum number of clusters to return
+            
+        Returns:
+            List of cluster information including id, similarity, summary, and metadata
+        """
         # Get query embedding
         query_embedding = self.embedding_model.encode([query])[0]
         
-        # Query cluster summaries
+        # Query cluster summaries using the centroid embeddings
         results = self.summaries_collection.query(
             query_embeddings=[query_embedding.tolist()],
             n_results=min(top_k, self.summaries_collection.count())
@@ -76,50 +85,105 @@ class RAGSystem:
         # Process results
         clusters = []
         for i in range(len(results['ids'][0])):
-            cluster_id = int(results['metadatas'][0][i]['cluster_id'])
+            metadata = results['metadatas'][0][i]
+            cluster_id = int(metadata['cluster_id'])
             distance = 1 - results['distances'][0][i]  # Convert to similarity score
             
             clusters.append({
                 'cluster_id': cluster_id,
                 'similarity': float(distance),
                 'summary': results['documents'][0][i],
-                'num_chunks': results['metadatas'][0][i]['num_chunks']
+                'num_chunks': int(metadata['num_chunks']),
+                'representative_chunk_id': metadata.get('representative_chunk_id', '')
             })
         
         return clusters
     
-    def retrieve_from_clusters(self, query: str, cluster_ids: List[int], top_k: int = 5) -> List[Dict[str, Any]]:
-        """Retrieve relevant chunks from specific clusters."""
+    def retrieve_from_clusters(self, query: str, cluster_ids: List[int], top_k: int = 20) -> List[Dict[str, Any]]:
+        """
+        Retrieve relevant chunks from specific clusters with enhanced ranking.
+        
+        Args:
+            query: The search query
+            cluster_ids: List of cluster IDs to search within
+            top_k: Maximum number of chunks to return
+            
+        Returns:
+            List of relevant chunks with metadata and similarity scores
+        """
+        if not cluster_ids:
+            return []
+            
         # Get query embedding
         query_embedding = self.embedding_model.encode([query])[0]
+        
+        # Get cluster summaries to access centroids and representative chunks
+        cluster_summaries = self.summaries_collection.get(
+            where={"cluster_id": {"$in": cluster_ids}}
+        )
+        
+        # Create a mapping of cluster_id to its summary info
+        cluster_info = {}
+        for i, summary_id in enumerate(cluster_summaries['ids']):
+            metadata = cluster_summaries['metadatas'][i]
+            cluster_info[int(metadata['cluster_id'])] = {
+                'centroid': metadata.get('centroid'),
+                'representative_chunk_id': metadata.get('representative_chunk_id', '')
+            }
         
         # Build filter for the specified clusters
         cluster_filters = [{"cluster_id": cid} for cid in cluster_ids]
         
-        # Query chunks from the specified clusters
-        results = self.chunks_collection.query(
+        # Query more chunks than needed to allow for re-ranking
+        query_results = self.chunks_collection.query(
             query_embeddings=[query_embedding.tolist()],
-            n_results=top_k,
+            n_results=top_k * 3,  # Get more results for better re-ranking
             where={"$or": cluster_filters}
         )
         
-        # Process results
+        # Process and re-rank results
         chunks = []
-        for i in range(len(results['ids'][0])):
+        for i in range(len(query_results['ids'][0])):
+            chunk_metadata = query_results['metadatas'][0][i]
+            cluster_id = int(chunk_metadata['cluster_id'])
+            
+            # Calculate additional features for re-ranking
+            is_representative = (chunk_metadata.get('id') == 
+                               cluster_info[cluster_id].get('representative_chunk_id', ''))
+            
+            # Boost score for representative chunks
+            similarity = 1 - query_results['distances'][0][i]
+            if is_representative:
+                similarity = min(similarity * 1.2, 1.0)  # Boost by 20%
+            
             chunks.append({
-                'text': results['documents'][0][i],
-                'source': results['metadatas'][0][i]['source'],
-                'title': results['metadatas'][0][i]['title'],
-                'chunk_index': results['metadatas'][0][i]['chunk_index'],
-                'cluster_id': results['metadatas'][0][i]['cluster_id'],
-                'similarity': 1 - results['distances'][0][i]  # Convert to similarity score
+                'id': query_results['ids'][0][i],
+                'text': query_results['documents'][0][i],
+                'source': chunk_metadata['source'],
+                'title': chunk_metadata['title'],
+                'chunk_index': chunk_metadata['chunk_index'],
+                'cluster_id': cluster_id,
+                'similarity': similarity,
+                'is_representative': is_representative
             })
         
-        return chunks
+        # Sort by combined score and take top_k
+        chunks.sort(key=lambda x: x['similarity'], reverse=True)
+        return chunks[:top_k]
     
-    def query(self, question: str, top_k_clusters: int = 3, top_k_chunks: int = 5) -> Dict[str, Any]:
-        """Process a query through the full RAG pipeline."""
-        # Step 1: Find relevant clusters
+    def query(self, question: str, top_k_clusters: int = 2, top_k_chunks: int = 10) -> Dict[str, Any]:
+        """
+        Process a query through the full RAG pipeline with enhanced retrieval.
+        
+        Args:
+            question: The user's question
+            top_k_clusters: Number of top clusters to consider
+            top_k_chunks: Number of chunks to return
+            
+        Returns:
+            Dictionary containing query results with clusters and relevant chunks
+        """
+        # Step 1: Find relevant clusters using centroid-based search
         clusters = self.get_relevant_clusters(question, top_k=top_k_clusters)
         
         if not clusters:
@@ -130,7 +194,7 @@ class RAGSystem:
                 'message': 'No relevant clusters found.'
             }
         
-        # Step 2: Retrieve chunks from the top clusters
+        # Step 2: Retrieve and re-rank chunks from the top clusters
         cluster_ids = [c['cluster_id'] for c in clusters]
         chunks = self.retrieve_from_clusters(
             question, 
@@ -138,15 +202,30 @@ class RAGSystem:
             top_k=top_k_chunks
         )
         
+        # Add cluster summary to each chunk for context
+        cluster_summaries = {c['cluster_id']: c for c in clusters}
+        for chunk in chunks:
+            chunk['cluster_summary'] = cluster_summaries[chunk['cluster_id']]['summary']
+        
         return {
             'question': question,
             'clusters': clusters,
             'results': chunks,
-            'message': 'Success'
+            'message': 'Success',
+            'topics_covered': [{
+                'cluster_id': c['cluster_id'],
+                'summary': c['summary'],
+                'num_chunks': c['num_chunks']
+            } for c in clusters]
         }
 
 def print_results(results: Dict[str, Any]) -> None:
-    """Print the results in a user-friendly format."""
+    """
+    Print the retrieval results in a user-friendly format with enhanced cluster information.
+    
+    Args:
+        results: Dictionary containing query results from RAGSystem.query()
+    """
     print("\n" + "="*80)
     print(f"QUERY: {results['question']}")
     print("="*80)
@@ -156,21 +235,31 @@ def print_results(results: Dict[str, Any]) -> None:
         return
     
     # Print cluster information
-    print("\nRELEVANT CLUSTERS:")
-    print("-" * 60)
+    print("\nRELEVANT TOPICS FOUND:")
+    print("-" * 80)
     for i, cluster in enumerate(results['clusters'], 1):
-        print(f"{i}. Cluster {cluster['cluster_id']} (Similarity: {cluster['similarity']:.2f})")
-        print(f"   Summary: {cluster['summary']}")
-        print(f"   Chunks in cluster: {cluster['num_chunks']}")
-        print("-" * 60)
+        print(f"{i}. [Cluster {cluster['cluster_id']}] - {cluster['summary'][:120]}...")
+        print(f"   Similarity: {cluster['similarity']:.3f} | Chunks: {cluster['num_chunks']} | "
+              f"Representative: {'Yes' if cluster.get('representative_chunk_id') else 'No'}")
     
-    # Print retrieved chunks
-    print("\nRETRIEVED CHUNKS:")
-    print("-" * 60)
+    # Print top chunks with cluster context
+    print("\nTOP CHUNKS (with cluster context):")
+    print("-" * 80)
     for i, chunk in enumerate(results['results'], 1):
-        print(f"{i}. [{chunk['source']}] {chunk['title']} (Cluster: {chunk['cluster_id']}, Similarity: {chunk['similarity']:.2f})")
-        print(f"   {chunk['text']}")
-        print("-" * 60)
+        print(f"{i}. [Score: {chunk['similarity']:.3f}] {chunk['title']}")
+        print(f"   Source: {chunk['source']} | Chunk: {chunk['chunk_index']} | "
+              f"Cluster: {chunk['cluster_id']}")
+        
+        # Highlight if this is the representative chunk for its cluster
+        if chunk.get('is_representative'):
+            print("   ★ REPRESENTATIVE CHUNK FOR THIS CLUSTER")
+        
+        # Print cluster summary for context
+        print(f"\n   CLUSTER CONTEXT: {chunk.get('cluster_summary', 'No summary available')[:200]}...")
+        
+        # Print chunk content
+        print(f"\n   CHUNK CONTENT: {chunk['text'][:300]}...")
+        print("\n" + "-" * 80 + "\n")
 
 def run_demo():
     """Run the interactive demo."""

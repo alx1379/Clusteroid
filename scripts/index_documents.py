@@ -112,23 +112,60 @@ class DocumentIndexer:
     
     def generate_cluster_summaries(self, chunks: List[Dict[str, Any]], 
                                  cluster_ids: np.ndarray) -> List[Dict[str, Any]]:
-        """Generate summaries for each cluster."""
+        """
+        Generate summaries for each cluster using centroid-based approach.
+        
+        For each cluster:
+        1. Calculate the centroid of the cluster
+        2. Find the chunk closest to the centroid as the most representative
+        3. Use that chunk as the summary
+        
+        Args:
+            chunks: List of document chunks with 'text' and 'embedding' keys
+            cluster_ids: Array of cluster assignments for each chunk
+            
+        Returns:
+            List of cluster summaries with 'cluster_id', 'summary', and 'num_chunks'
+        """
         unique_clusters = set(cluster_ids)
         summaries = []
         
+        # Generate embeddings for all chunks if not already present
+        for chunk in chunks:
+            if 'embedding' not in chunk:
+                chunk['embedding'] = self.embedding_model.encode(chunk['text'])
+        
         for cluster_id in unique_clusters:
-            # Get chunks belonging to this cluster
-            cluster_chunks = [chunk for chunk, cid in zip(chunks, cluster_ids) 
-                            if cid == cluster_id]
+            # Get chunks and their embeddings for this cluster
+            cluster_data = [(chunk, cid, np.array(chunk.get('embedding', []))) 
+                          for chunk, cid in zip(chunks, cluster_ids) 
+                          if cid == cluster_id]
             
-            # For demo purposes, we'll just join the first few chunks as a summary
-            # In a real implementation, you would use an LLM to generate a proper summary
-            summary_text = " ".join([chunk['text'] for chunk in cluster_chunks[:3]])
+            if not cluster_data:
+                continue
+                
+            cluster_chunks, _, cluster_embeddings = zip(*cluster_data)
+            cluster_embeddings = np.array(cluster_embeddings)
+            
+            # Calculate cluster centroid
+            centroid = np.mean(cluster_embeddings, axis=0)
+            
+            # Find the chunk whose embedding is closest to the centroid
+            distances = np.linalg.norm(cluster_embeddings - centroid, axis=1)
+            most_representative_idx = np.argmin(distances)
+            representative_chunk = cluster_chunks[most_representative_idx]
+            
+            # Use the most representative chunk as the summary
+            # In a production environment, you might want to use an LLM
+            # to generate a more concise summary from the representative chunk
+            summary_text = representative_chunk['text']
             
             summaries.append({
                 'cluster_id': int(cluster_id),
-                'summary': summary_text[:1000],  # Limit summary length
-                'num_chunks': len(cluster_chunks)
+                'summary': summary_text[:2000],  # Limit summary length
+                'num_chunks': len(cluster_chunks),
+                'centroid': centroid.tolist(),  # Store centroid for future reference
+                'representative_chunk_id': representative_chunk.get('id', '')  # Store reference to the chunk
             })
             
         return summaries
