@@ -2,6 +2,11 @@
 
 Clusteroid is a Python-based RAG (Retrieval-Augmented Generation) system that implements dynamic document clustering and meta-level retrieval through cluster summaries. This system helps in efficiently retrieving relevant information by first identifying the most relevant document clusters before performing detailed retrieval.
 
+## Attribution
+This project was created by [Alex Erofeev](http://aigentto.com/) at [AIGENTTO](http://aigentto.com/).
+
+Licensed under the [Apache License 2.0](LICENSE).
+
 ## Features
 
 - **Document Clustering**: Automatically groups similar document chunks into clusters
