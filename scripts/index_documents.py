@@ -5,25 +5,44 @@ import chromadb
 import numpy as np
 from tqdm import tqdm
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union, Tuple
 from sentence_transformers import SentenceTransformer
-from sklearn.cluster import KMeans
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document as LangchainDocument
 from dotenv import load_dotenv
+
+# Import clustering components
+from clustering.factory import ClustererFactory, Clusterer
+from clustering.kmeans import KMeansClusterer
+from clustering.hdbscan import HDBSCANClusterer
 
 # Load environment variables
 load_dotenv()
 
 class DocumentIndexer:
-    def __init__(self, data_dir: str = "data", db_path: str = "chroma_db"):
+    def __init__(self, data_dir: str = "data", db_path: str = "chroma_db", 
+                 clustering_algorithm: str = 'kmeans', clustering_params: Optional[Dict[str, Any]] = None):
         """
         Initialize the document indexer with data directory and database path.
         
         Args:
             data_dir: Path to data directory (relative to script)
             db_path: Path to store the ChromaDB (relative to script)
+            clustering_algorithm: Name of the clustering algorithm to use ('kmeans' or 'hdbscan')
+            clustering_params: Dictionary of parameters to pass to the clustering algorithm
         """
+        # Default clustering parameters
+        self.default_clustering_params = {
+            'kmeans': {'n_clusters': 5, 'random_state': 42},
+            'hdbscan': {'min_cluster_size': 5, 'min_samples': None, 'metric': 'euclidean'}
+        }
+        
+        # Set up clustering
+        self.clustering_algorithm = clustering_algorithm.lower()
+        self.clustering_params = clustering_params or self.default_clustering_params.get(self.clustering_algorithm, {})
+        
+        # Initialize the clusterer
+        self.clusterer = self._initialize_clusterer()
         # Get project root directory (one level up from scripts)
         script_dir = Path(__file__).parent.absolute()
         project_root = script_dir.parent.absolute()
@@ -105,10 +124,44 @@ class DocumentIndexer:
         """Generate embeddings for a list of texts."""
         return self.embedding_model.encode(texts, show_progress_bar=True)
     
-    def cluster_documents(self, embeddings: np.ndarray, n_clusters: int = 5) -> np.ndarray:
-        """Cluster document chunks using KMeans."""
-        kmeans = KMeans(n_clusters=min(n_clusters, len(embeddings)), random_state=42)
-        return kmeans.fit_predict(embeddings)
+    def _initialize_clusterer(self) -> Clusterer:
+        """Initialize the clustering algorithm based on configuration."""
+        try:
+            return ClustererFactory.create(
+                self.clustering_algorithm,
+                **self.clustering_params
+            )
+        except ValueError as e:
+            available = ", ".join(f"'{name}'" for name in ClustererFactory.get_available_algorithms().keys())
+            raise ValueError(
+                f"Failed to initialize clustering algorithm '{self.clustering_algorithm}'. "
+                f"Available algorithms are: {available}. Error: {str(e)}"
+            )
+    
+    def cluster_documents(self, embeddings: np.ndarray, **kwargs) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        Cluster document chunks using the configured clustering algorithm.
+        
+        Args:
+            embeddings: Document embeddings to cluster
+            **kwargs: Additional parameters to pass to the clustering algorithm
+            
+        Returns:
+            Tuple of (cluster_assignments, metadata) where metadata contains
+            algorithm-specific information about the clustering
+        """
+        if len(embeddings) == 0:
+            return np.array([]), {}
+        
+        # Only pass relevant parameters to the clusterer based on the algorithm
+        if self.clustering_algorithm == 'kmeans' and 'n_clusters' in kwargs:
+            return self.clusterer.fit_predict(embeddings, **kwargs)
+        elif self.clustering_algorithm == 'hdbscan':
+            # HDBSCAN doesn't use n_clusters, so we remove it
+            kwargs.pop('n_clusters', None)
+            return self.clusterer.fit_predict(embeddings, **kwargs)
+        else:
+            return self.clusterer.fit_predict(embeddings, **kwargs)
     
     def generate_cluster_summaries(self, chunks: List[Dict[str, Any]], 
                                  cluster_ids: np.ndarray) -> List[Dict[str, Any]]:
@@ -225,11 +278,29 @@ class DocumentIndexer:
         chunk_texts = [chunk['text'] for chunk in chunks]
         chunk_embeddings = self.generate_embeddings(chunk_texts)
         
-        print("Clustering documents...")
-        cluster_ids = self.cluster_documents(chunk_embeddings, n_clusters=n_clusters)
+        print(f"Clustering documents using {self.clustering_algorithm}...")
+        
+        # Only pass n_clusters if it's not None (for KMeans)
+        cluster_kwargs = {}
+        if n_clusters is not None and self.clustering_algorithm == 'kmeans':
+            cluster_kwargs['n_clusters'] = n_clusters
+            
+        cluster_ids, cluster_metadata = self.cluster_documents(chunk_embeddings, **cluster_kwargs)
+        
+        # Count actual clusters (excluding noise points which are -1)
+        unique_clusters = set(cluster_ids)
+        num_clusters = len(unique_clusters) - (1 if -1 in unique_clusters else 0)
+        
+        print(f"Found {num_clusters} clusters")
+        if -1 in cluster_ids:  # HDBSCAN might have noise points
+            print(f"  - Noise points: {np.sum(cluster_ids == -1)} (assigned to cluster -1)")
         
         print("Generating cluster summaries...")
         cluster_summaries = self.generate_cluster_summaries(chunks, cluster_ids)
+        
+        # Add clustering metadata to the first cluster summary for reference
+        if cluster_summaries and cluster_metadata:
+            cluster_summaries[0]['clustering_metadata'] = cluster_metadata
         
         print("Saving to ChromaDB...")
         self.save_to_chroma(chunks, cluster_ids, cluster_summaries)
@@ -245,16 +316,56 @@ if __name__ == "__main__":
                        help='Directory containing documents to index (relative to script)')
     parser.add_argument('--db-path', type=str, default='chroma_db',
                        help='Path to store the ChromaDB (relative to script)')
-    parser.add_argument('--clusters', type=int, default=5,
-                       help='Number of clusters to create (default: 5)')
+    # Clustering arguments
+    clustering_group = parser.add_argument_group('clustering options')
+    clustering_group.add_argument('--clustering-algorithm', type=str, default='kmeans',
+                                choices=['kmeans', 'hdbscan'],
+                                help='Clustering algorithm to use (default: kmeans)')
+    
+    # KMeans specific args
+    kmeans_group = parser.add_argument_group('KMeans options')
+    kmeans_group.add_argument('--n-clusters', type=int, default=5,
+                            help='Number of clusters to create (only for KMeans, default: 5)')
+    
+    # HDBSCAN specific args
+    hdbscan_group = parser.add_argument_group('HDBSCAN options')
+    hdbscan_group.add_argument('--min-cluster-size', type=int, default=5,
+                             help='Minimum cluster size (only for HDBSCAN, default: 5)')
+    hdbscan_group.add_argument('--min-samples', type=int, default=None,
+                             help='Minimum samples in neighborhood (only for HDBSCAN, default: same as min_cluster_size)')
+    hdbscan_group.add_argument('--cluster-selection-epsilon', type=float, default=0.0,
+                             help='Distance threshold for cluster merging (only for HDBSCAN, default: 0.0)')
     
     args = parser.parse_args()
     
     # Create data directory if it doesn't exist
     os.makedirs(args.data_dir, exist_ok=True)
     
-    indexer = DocumentIndexer(data_dir=args.data_dir, db_path=args.db_path)
-    cluster_summaries = indexer.run(n_clusters=args.clusters)
+    # Prepare clustering parameters based on selected algorithm
+    clustering_params = {}
+    if args.clustering_algorithm == 'kmeans':
+        clustering_params = {
+            'n_clusters': args.n_clusters,
+            'random_state': 42
+        }
+    elif args.clustering_algorithm == 'hdbscan':
+        clustering_params = {
+            'min_cluster_size': args.min_cluster_size,
+            'min_samples': args.min_samples or args.min_cluster_size,
+            'cluster_selection_epsilon': args.cluster_selection_epsilon
+        }
+    
+    # Initialize and run the indexer
+    indexer = DocumentIndexer(
+        data_dir=args.data_dir, 
+        db_path=args.db_path,
+        clustering_algorithm=args.clustering_algorithm,
+        clustering_params=clustering_params
+    )
+    
+    # For backward compatibility, pass n_clusters if using KMeans
+    n_clusters = args.n_clusters if args.clustering_algorithm == 'kmeans' else None
+    cluster_summaries = indexer.run(n_clusters=n_clusters)
     
     # Print cluster summaries
     print("\nCluster Summaries:")

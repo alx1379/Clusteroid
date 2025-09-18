@@ -1,4 +1,6 @@
-# Clusteroid: Dynamic RAG with Meta-Level Retrieval
+# Clusteroid
+
+Clusteroid is a document clustering and retrieval system that supports multiple clustering algorithms for organizing and searching document collections.: Dynamic RAG with Meta-Level Retrieval
 
 Clusteroid is a Python-based RAG (Retrieval-Augmented Generation) system that implements dynamic document clustering and meta-level retrieval through cluster summaries. This system helps in efficiently retrieving relevant information by first identifying the most relevant document clusters before performing detailed retrieval.
 
@@ -48,6 +50,53 @@ Clusteroid/
    ```bash
    pip install -r requirements.txt
    ```
+
+## Clustering Algorithms
+
+Clusteroid supports multiple clustering algorithms:
+
+### K-Means
+- **Description**: Partitions documents into k clusters where each document belongs to the cluster with the nearest mean.
+- **Use Case**: When you know the number of clusters in advance and want equally sized clusters.
+- **Parameters**:
+  - `n_clusters`: Number of clusters to form
+  - `random_state`: Random seed for reproducibility
+
+### HDBSCAN
+- **Description**: Hierarchical Density-Based Spatial Clustering of Applications with Noise. Finds clusters of varying shapes and sizes, and identifies noise points.
+- **Use Case**: When you don't know the number of clusters in advance and want to find clusters of varying densities.
+- **Parameters**:
+  - `min_cluster_size`: Minimum number of points in a cluster
+  - `min_samples`: Number of samples in a neighborhood for a point to be considered a core point
+  - `cluster_selection_epsilon`: Distance threshold for cluster merging
+
+## Usage
+
+### Indexing Documents
+
+```bash
+# Using K-Means (default)
+python scripts/index_documents.py --data-dir data --n-clusters 5
+
+# Using HDBSCAN
+python scripts/index_documents.py --data-dir data --clustering-algorithm hdbscan --min-cluster-size 5
+```
+
+### Available Arguments
+
+```
+--data-dir DIR           Directory containing documents to index (default: data)
+--db-path PATH           Path to store the ChromaDB (default: chroma_db)
+
+Clustering options:
+  --clustering-algorithm {kmeans,hdbscan}
+                        Clustering algorithm to use (default: kmeans)
+  --n-clusters N         For KMeans: number of clusters to create (default: 5)
+  --min-cluster-size N   For HDBSCAN: minimum cluster size (default: 5)
+  --min-samples N        For HDBSCAN: minimum samples in neighborhood
+  --cluster-selection-epsilon FLOAT
+                        For HDBSCAN: distance threshold for cluster merging (default: 0.0)
+```
 
 ## Quick Start
 

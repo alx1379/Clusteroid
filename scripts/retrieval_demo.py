@@ -38,15 +38,16 @@ class RAGSystem:
         
         # Check if the collections exist
         try:
-            collections = [c.name for c in self.chroma_client.list_collections()]
-            print(f"Found collections: {collections}")
+            # In Chroma v0.6.0, list_collections returns just the names
+            collection_names = self.chroma_client.list_collections()
+            print(f"Found collections: {collection_names}")
             
-            if not collections:
+            if not collection_names:
                 raise ValueError("No collections found in the database.")
                 
-            if "chunks" not in collections or "cluster_summaries" not in collections:
+            if "chunks" not in collection_names or "cluster_summaries" not in collection_names:
                 raise ValueError(
-                    f"Required collections not found. Found: {collections}"
+                    f"Required collections not found. Found: {collection_names}"
                 )
                 
             self.chunks_collection = self.chroma_client.get_collection("chunks")
@@ -60,6 +61,11 @@ class RAGSystem:
             print(f"Error accessing collections: {e}")
             print("\nPlease make sure to run 'python scripts/index_documents.py' first.")
             print(f"Database path: {self.db_path.absolute()}")
+            print("\nTroubleshooting steps:")
+            print("1. Make sure you've run 'python scripts/index_documents.py'")
+            print("2. Check if the database path is correct")
+            print("3. Verify that the collections 'chunks' and 'cluster_summaries' exist")
+            print(f"\nCurrent working directory: {os.getcwd()}")
             raise
     
     def get_relevant_clusters(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
@@ -73,29 +79,41 @@ class RAGSystem:
         Returns:
             List of cluster information including id, similarity, summary, and metadata
         """
+        print(f"\n=== DEBUG: get_relevant_clusters ===")
+        print(f"Query: {query}")
+        print(f"Top K: {top_k}")
+        
         # Get query embedding
         query_embedding = self.embedding_model.encode([query])[0]
         
         # Query cluster summaries using the centroid embeddings
         results = self.summaries_collection.query(
             query_embeddings=[query_embedding.tolist()],
-            n_results=min(top_k, self.summaries_collection.count())
+            n_results=min(top_k, self.summaries_collection.count()),
+            include=['documents', 'metadatas', 'distances']
         )
+        
+        print(f"DEBUG: Found {len(results.get('ids', [[]])[0])} clusters")
         
         # Process results
         clusters = []
-        for i in range(len(results['ids'][0])):
-            metadata = results['metadatas'][0][i]
-            cluster_id = int(metadata['cluster_id'])
-            distance = 1 - results['distances'][0][i]  # Convert to similarity score
-            
-            clusters.append({
-                'cluster_id': cluster_id,
-                'similarity': float(distance),
-                'summary': results['documents'][0][i],
-                'num_chunks': int(metadata['num_chunks']),
-                'representative_chunk_id': metadata.get('representative_chunk_id', '')
-            })
+        if results and 'ids' in results and results['ids']:
+            for i in range(len(results['ids'][0])):
+                metadata = results['metadatas'][0][i] if results.get('metadatas') and results['metadatas'] else {}
+                cluster_id = int(metadata.get('cluster_id', -1))
+                
+                # Handle distance/similarity calculation
+                similarity = 1.0
+                if 'distances' in results and results['distances'] and results['distances'][0]:
+                    similarity = 1 - results['distances'][0][i]  # Convert to similarity score
+                
+                clusters.append({
+                    'cluster_id': cluster_id,
+                    'similarity': float(similarity),
+                    'summary': results['documents'][0][i] if results.get('documents') and results['documents'] else "",
+                    'num_chunks': int(metadata.get('num_chunks', 0)),
+                    'representative_chunk_id': metadata.get('representative_chunk_id', '')
+                })
         
         return clusters
     
@@ -111,63 +129,96 @@ class RAGSystem:
         Returns:
             List of relevant chunks with metadata and similarity scores
         """
+        print(f"\n=== DEBUG: retrieve_from_clusters ===")
+        print(f"Query: {query}")
+        print(f"Cluster IDs: {cluster_ids}")
+        print(f"Top K: {top_k}")
+        
         if not cluster_ids:
+            print("DEBUG: No cluster IDs provided")
             return []
             
         # Get query embedding
         query_embedding = self.embedding_model.encode([query])[0]
         
         # Get cluster summaries to access centroids and representative chunks
+        print("\nDEBUG: Fetching cluster summaries...")
         cluster_summaries = self.summaries_collection.get(
             where={"cluster_id": {"$in": cluster_ids}}
         )
+        print(f"DEBUG: Found {len(cluster_summaries['ids'])} cluster summaries")
         
         # Create a mapping of cluster_id to its summary info
         cluster_info = {}
         for i, summary_id in enumerate(cluster_summaries['ids']):
             metadata = cluster_summaries['metadatas'][i]
-            cluster_info[int(metadata['cluster_id'])] = {
+            cluster_id = int(metadata['cluster_id'])
+            cluster_info[cluster_id] = {
                 'centroid': metadata.get('centroid'),
                 'representative_chunk_id': metadata.get('representative_chunk_id', '')
             }
+            print(f"DEBUG: Cluster {cluster_id} - {cluster_summaries['documents'][i][:100]}...")
         
         # Build filter for the specified clusters
-        cluster_filters = [{"cluster_id": cid} for cid in cluster_ids]
+        # Ensure we're using the same type as stored in the database (integers)
+        where_clause = {"cluster_id": {"$in": cluster_ids}} if cluster_ids else None
+        print(f"\nDEBUG: Querying chunks with where clause: {where_clause}")
+        print(f"DEBUG: Cluster IDs type: {[type(cid) for cid in cluster_ids]}")
         
-        # Query more chunks than needed to allow for re-ranking
-        query_results = self.chunks_collection.query(
-            query_embeddings=[query_embedding.tolist()],
-            n_results=top_k * 3,  # Get more results for better re-ranking
-            where={"$or": cluster_filters}
-        )
+        try:
+            # Query chunks within the specified clusters
+            print("DEBUG: Executing query...")
+            results = self.chunks_collection.query(
+                query_embeddings=[query_embedding.tolist()],
+                n_results=top_k,
+                where=where_clause,
+                include=['documents', 'metadatas', 'distances']
+            )
+            
+            print(f"DEBUG: Query results - {len(results.get('ids', [[]])[0])} chunks found")
+            if results and 'ids' in results and results['ids']:
+                print(f"DEBUG: First chunk ID: {results['ids'][0][0] if results['ids'][0] else 'None'}")
+                print(f"DEBUG: First chunk metadata: {results['metadatas'][0][0] if results.get('metadatas') and results['metadatas'] and results['metadatas'][0] else 'None'}")
+                print(f"DEBUG: First chunk distance: {results['distances'][0][0] if results.get('distances') and results['distances'] and results['distances'][0] else 'None'}")
+            else:
+                print("DEBUG: No results returned from query")
+                
+        except Exception as e:
+            print(f"ERROR in query: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return []
         
-        # Process and re-rank results
+        # Process results
         chunks = []
-        for i in range(len(query_results['ids'][0])):
-            chunk_metadata = query_results['metadatas'][0][i]
-            cluster_id = int(chunk_metadata['cluster_id'])
-            
-            # Calculate additional features for re-ranking
-            is_representative = (chunk_metadata.get('id') == 
-                               cluster_info[cluster_id].get('representative_chunk_id', ''))
-            
-            # Boost score for representative chunks
-            similarity = 1 - query_results['distances'][0][i]
-            if is_representative:
-                similarity = min(similarity * 1.2, 1.0)  # Boost by 20%
-            
-            chunks.append({
-                'id': query_results['ids'][0][i],
-                'text': query_results['documents'][0][i],
-                'source': chunk_metadata['source'],
-                'title': chunk_metadata['title'],
-                'chunk_index': chunk_metadata['chunk_index'],
-                'cluster_id': cluster_id,
-                'similarity': similarity,
-                'is_representative': is_representative
-            })
+        if results and 'ids' in results and results['ids'] and results['ids'][0]:
+            for i in range(len(results['ids'][0])):
+                metadata = results['metadatas'][0][i] if results.get('metadatas') and results['metadatas'] else {}
+                
+                # Handle distance/similarity calculation
+                similarity = 1.0
+                if 'distances' in results and results['distances'] and results['distances'][0]:
+                    similarity = 1 - results['distances'][0][i]  # Convert to similarity score
+                
+                # Get the cluster ID safely
+                cluster_id = int(metadata.get('cluster_id', -1))
+                
+                # Get the cluster info for this chunk
+                current_cluster_info = cluster_info.get(cluster_id, {})
         
-        # Sort by combined score and take top_k
+                # Add chunk to results
+                chunks.append({
+                    'text': results['documents'][0][i] if results.get('documents') and results['documents'] else "",
+                    'similarity': float(similarity),
+                    'source': metadata.get('source', ''),
+                    'title': metadata.get('title', ''),
+                    'chunk_index': int(metadata.get('chunk_index', 0)),
+                    'document_id': metadata.get('document_id', ''),
+                    'cluster_id': cluster_id,
+                    'is_representative': metadata.get('chunk_id') == current_cluster_info.get('representative_chunk_id', '')
+                })
+        
+        # Sort by similarity and return top_k results
         chunks.sort(key=lambda x: x['similarity'], reverse=True)
         return chunks[:top_k]
     
@@ -245,20 +296,39 @@ def print_results(results: Dict[str, Any]) -> None:
     # Print top chunks with cluster context
     print("\nTOP CHUNKS (with cluster context):")
     print("-" * 80)
+    
+    if not results['results']:
+        print("No relevant chunks found in the top clusters.")
+        return
+        
     for i, chunk in enumerate(results['results'], 1):
-        print(f"{i}. [Score: {chunk['similarity']:.3f}] {chunk['title']}")
-        print(f"   Source: {chunk['source']} | Chunk: {chunk['chunk_index']} | "
-              f"Cluster: {chunk['cluster_id']}")
+        # Safely get chunk fields with defaults
+        title = chunk.get('title', 'Untitled')
+        source = chunk.get('source', 'Unknown source')
+        chunk_idx = chunk.get('chunk_index', 0)
+        cluster_id = chunk.get('cluster_id', -1)
+        similarity = chunk.get('similarity', 0.0)
+        
+        # Print chunk header
+        print(f"\n{i}. [Score: {similarity:.3f}] {title}")
+        print(f"   Source: {source} | Chunk: {chunk_idx} | "
+              f"Cluster: {cluster_id}")
         
         # Highlight if this is the representative chunk for its cluster
         if chunk.get('is_representative'):
             print("   ★ REPRESENTATIVE CHUNK FOR THIS CLUSTER")
         
-        # Print cluster summary for context
-        print(f"\n   CLUSTER CONTEXT: {chunk.get('cluster_summary', 'No summary available')[:200]}...")
+        # Print cluster summary for context if available
+        cluster_summary = chunk.get('cluster_summary')
+        if cluster_summary:
+            print(f"\n   CLUSTER CONTEXT: {cluster_summary[:200]}{'...' if len(str(cluster_summary)) > 200 else ''}")
         
-        # Print chunk content
-        print(f"\n   CHUNK CONTENT: {chunk['text'][:300]}...")
+        # Print chunk content if available
+        chunk_text = chunk.get('text', '')
+        if chunk_text:
+            print(f"\n   CHUNK CONTENT: {chunk_text[:300]}{'...' if len(chunk_text) > 300 else ''}")
+        else:
+            print("\n   [No content available for this chunk]")
         print("\n" + "-" * 80 + "\n")
 
 def run_demo():
