@@ -31,7 +31,7 @@ class RAGSystem:
         self.db_path.mkdir(parents=True, exist_ok=True)
         
         # Initialize the embedding model
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        self.embedding_model = SentenceTransformer('intfloat/multilingual-e5-large')
         
         # Initialize ChromaDB client
         self.chroma_client = chromadb.PersistentClient(path=str(self.db_path))

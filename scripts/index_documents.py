@@ -6,6 +6,7 @@ import numpy as np
 from tqdm import tqdm
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union, Tuple
+from sklearn.preprocessing import normalize
 from sentence_transformers import SentenceTransformer
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document as LangchainDocument
@@ -61,7 +62,7 @@ class DocumentIndexer:
             
         # Create database directory if it doesn't exist
         self.db_path.mkdir(parents=True, exist_ok=True)
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        self.embedding_model = SentenceTransformer('intfloat/multilingual-e5-large')
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=500,
             chunk_overlap=50,
@@ -127,6 +128,20 @@ class DocumentIndexer:
     def _initialize_clusterer(self) -> Clusterer:
         """Initialize the clustering algorithm based on configuration."""
         try:
+            # For HDBSCAN, we need to handle the metric parameter specially
+            if self.clustering_algorithm == 'hdbscan':
+                # Ensure we're using a valid metric for HDBSCAN
+                metric = self.clustering_params.get('metric', 'euclidean')
+                if metric == 'cosine':
+                    # For cosine distance, we need to use 'cosine' in HDBSCAN
+                    self.clustering_params['metric'] = 'cosine'
+                else:
+                    # Default to euclidean if not specified or invalid
+                    self.clustering_params['metric'] = 'euclidean'
+                
+                # Remove n_clusters if it exists (not used by HDBSCAN)
+                self.clustering_params.pop('n_clusters', None)
+            
             return ClustererFactory.create(
                 self.clustering_algorithm,
                 **self.clustering_params
@@ -137,6 +152,26 @@ class DocumentIndexer:
                 f"Failed to initialize clustering algorithm '{self.clustering_algorithm}'. "
                 f"Available algorithms are: {available}. Error: {str(e)}"
             )
+    
+    def _normalize_embeddings(self, embeddings: np.ndarray) -> np.ndarray:
+        """
+        Normalize embeddings to unit length (L2 norm).
+        
+        Args:
+            embeddings: Input embeddings to normalize
+            
+        Returns:
+            Normalized embeddings with unit length
+        """
+        if len(embeddings) == 0:
+            return embeddings
+            
+        # Check if embeddings are already normalized
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        if np.allclose(norms, 1.0, rtol=1e-5, atol=1e-8):
+            return embeddings
+            
+        return normalize(embeddings, norm='l2')
     
     def cluster_documents(self, embeddings: np.ndarray, **kwargs) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
@@ -152,16 +187,18 @@ class DocumentIndexer:
         """
         if len(embeddings) == 0:
             return np.array([]), {}
+            
+        # Normalize embeddings before clustering
+        normalized_embeddings = self._normalize_embeddings(embeddings)
         
         # Only pass relevant parameters to the clusterer based on the algorithm
         if self.clustering_algorithm == 'kmeans' and 'n_clusters' in kwargs:
-            return self.clusterer.fit_predict(embeddings, **kwargs)
+            return self.clusterer.fit_predict(normalized_embeddings, **kwargs)
         elif self.clustering_algorithm == 'hdbscan':
-            # HDBSCAN doesn't use n_clusters, so we remove it
-            kwargs.pop('n_clusters', None)
-            return self.clusterer.fit_predict(embeddings, **kwargs)
+            # HDBSCAN parameters are set during initialization, so we don't need to pass them here
+            return self.clusterer.fit_predict(normalized_embeddings)
         else:
-            return self.clusterer.fit_predict(embeddings, **kwargs)
+            return self.clusterer.fit_predict(normalized_embeddings, **kwargs)
     
     def generate_cluster_summaries(self, chunks: List[Dict[str, Any]], 
                                  cluster_ids: np.ndarray) -> List[Dict[str, Any]]:
