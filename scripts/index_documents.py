@@ -417,14 +417,16 @@ class DocumentIndexer:
     def cleanup_chromadb(self):
         """
         Delete all collections in ChromaDB to completely reset the database.
+        Compatible with ChromaDB v0.6.0+
         """
         try:
-            # Получаем список всех коллекций
-            collections = self.chroma_client.list_collections()
+            # Get list of all collection names
+            collection_names = self.chroma_client.list_collections()
             
-            # Удаляем каждую коллекцию
-            for coll in collections:
-                self.chroma_client.delete_collection(name=coll.name)
+            # Delete each collection by name
+            for name in collection_names:
+                self.chroma_client.delete_collection(name=name)
+                print(f"Collection {name} deleted.")
             
             print("All ChromaDB collections have been deleted.")
             return True
