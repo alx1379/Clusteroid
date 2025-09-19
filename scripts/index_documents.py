@@ -325,8 +325,40 @@ class DocumentIndexer:
             ids=[f"cluster_{summary['cluster_id']}" for summary in cluster_summaries]
         )
     
-    def run(self, n_clusters: int = 5):
-        """Run the full document indexing pipeline."""
+    def cleanup_chromadb(self):
+        """
+        Clean up ChromaDB collection by deleting all existing data.
+        This ensures we start with a clean state for each indexing run.
+        """
+        try:
+            # Get or create the collection
+            collection = self.chroma_client.get_or_create_collection(
+                name="documents",
+                metadata={"hnsw:space": "cosine"}
+            )
+            
+            # Delete all documents in the collection
+            collection.delete(where={"$exists": "id"})
+            print("Cleaned up existing data from ChromaDB")
+            return True
+            
+        except Exception as e:
+            print(f"Error cleaning up ChromaDB: {str(e)}")
+            return False
+    
+    def run(self, n_clusters: int = 5) -> List[Dict[str, Any]]:
+        """
+        Run the full document indexing pipeline.
+        
+        Args:
+            n_clusters: Number of clusters to create (for KMeans)
+            
+        Returns:
+            List of cluster summaries
+        """
+        # Clean up ChromaDB before starting
+        self.cleanup_chromadb()
+        
         print("Loading documents...")
         documents = self.load_documents()
         
