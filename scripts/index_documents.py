@@ -372,6 +372,9 @@ if __name__ == "__main__":
                              help='Minimum samples in neighborhood (only for HDBSCAN, default: same as min_cluster_size)')
     hdbscan_group.add_argument('--cluster-selection-epsilon', type=float, default=0.0,
                              help='Distance threshold for cluster merging (only for HDBSCAN, default: 0.0)')
+    hdbscan_group.add_argument('--metric', type=str, default='euclidean',
+                             choices=['euclidean', 'cosine'],
+                             help='Distance metric to use for HDBSCAN (default: euclidean)')
     
     args = parser.parse_args()
     
@@ -389,7 +392,8 @@ if __name__ == "__main__":
         clustering_params = {
             'min_cluster_size': args.min_cluster_size,
             'min_samples': args.min_samples or args.min_cluster_size,
-            'cluster_selection_epsilon': args.cluster_selection_epsilon
+            'cluster_selection_epsilon': args.cluster_selection_epsilon,
+            'metric': args.metric
         }
     
     # Initialize and run the indexer

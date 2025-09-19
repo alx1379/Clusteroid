@@ -69,6 +69,7 @@ Clusteroid supports multiple clustering algorithms:
   - `min_cluster_size`: Minimum number of points in a cluster
   - `min_samples`: Number of samples in a neighborhood for a point to be considered a core point
   - `cluster_selection_epsilon`: Distance threshold for cluster merging
+  - `metric`: Distance metric to use ('euclidean' or 'cosine')
 
 ## Usage
 
@@ -78,8 +79,11 @@ Clusteroid supports multiple clustering algorithms:
 # Using K-Means (default)
 python scripts/index_documents.py --data-dir data --n-clusters 5
 
-# Using HDBSCAN
+# Using HDBSCAN with euclidean distance (default)
 python scripts/index_documents.py --data-dir data --clustering-algorithm hdbscan --min-cluster-size 5
+
+# Using HDBSCAN with cosine distance
+python scripts/index_documents.py --data-dir data --clustering-algorithm hdbscan --min-cluster-size 5 --metric cosine
 ```
 
 ### Available Arguments
@@ -96,6 +100,8 @@ Clustering options:
   --min-samples N        For HDBSCAN: minimum samples in neighborhood
   --cluster-selection-epsilon FLOAT
                         For HDBSCAN: distance threshold for cluster merging (default: 0.0)
+  --metric {euclidean,cosine}
+                        For HDBSCAN: distance metric to use (default: euclidean)
 ```
 
 ## Quick Start

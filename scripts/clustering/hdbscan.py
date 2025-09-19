@@ -39,16 +39,35 @@ class HDBSCANClusterer(Clusterer):
     
     def fit_predict(self, embeddings: np.ndarray, **kwargs) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
-        Fit HDBSCAN to the data and return cluster assignments.
+        Fit the clusterer and predict cluster labels.
         
         Args:
-            embeddings: Input data embeddings to cluster
-            **kwargs: Additional parameters passed to HDBSCAN
+            embeddings: Embeddings to cluster
+            **kwargs: Additional arguments to pass to HDBSCAN
             
         Returns:
-            Tuple of (cluster_assignments, metadata) where metadata contains
-            information like cluster probabilities and exemplars
+            Tuple of (cluster_assignments, cluster_metadata)
         """
+        # Normalize embeddings if using cosine distance
+        if self.metric == 'cosine':
+            # Normalize embeddings to unit length for cosine distance
+            norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0  # Avoid division by zero
+            embeddings = embeddings / norms
+            # Use euclidean distance on normalized vectors (equivalent to cosine distance)
+            effective_metric = 'euclidean'
+        else:
+            effective_metric = self.metric
+            
+        # Create new instance for each fit to avoid state issues
+        self._hdbscan = hdbscan_lib.HDBSCAN(
+            min_cluster_size=self.min_cluster_size,
+            min_samples=self.min_samples,
+            metric=effective_metric,
+            cluster_selection_epsilon=self.cluster_selection_epsilon,
+            **self.kwargs
+        )
+        
         # Fit and predict
         cluster_assignments = self._hdbscan.fit_predict(embeddings, **kwargs)
         
