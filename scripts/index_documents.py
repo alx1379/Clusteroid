@@ -1,6 +1,7 @@
 import os
 import json
 import yaml
+import re
 import chromadb
 import numpy as np
 from tqdm import tqdm
@@ -75,9 +76,90 @@ class DocumentIndexer:
         # Initialize ChromaDB client
         self.chroma_client = chromadb.PersistentClient(path=str(self.db_path))
         
+    def is_gibberish(self, text: str) -> bool:
+        """
+        Check if the text contains too many non-words or gibberish.
+        
+        Args:
+            text: Text to check
+            
+        Returns:
+            bool: True if text contains too many non-words, False otherwise
+        """
+        if not text.strip():
+            return True
+            
+        # Split into words (preserve both Cyrillic and Latin words)
+        words = re.findall(r'\b[\w-]+\b', text)
+        if not words:
+            return True
+            
+        # Common word endings in Russian and English
+        common_endings = {
+            # Russian noun/adj endings
+            'ый', 'ий', 'ой', 'ая', 'яя', 'ое', 'ее', 'ые', 'ие', 'ь', 'ей', 'ом', 'ем', 'ой', 'ей', 
+            'ую', 'юю', 'ым', 'им', 'ом', 'ем', 'ых', 'их', 'ыми', 'ими', 'ых', 'их',
+            'ам', 'ям', 'ами', 'ями', 'ах', 'ях',
+            # English common endings
+            'ing', 'tion', 'ment', 'ness', 'ity', 'ance', 'ence', 'ship', 'hood', 'dom', 'ism',
+            'er', 'or', 'ist', 'ian', 'ant', 'ent', 'ary', 'ery', 'ory', 'ful', 'less', 'ish',
+            'ed', 'en', 'es', 's', 'ly'
+        }
+        
+        # Common word beginnings in Russian and English
+        common_beginnings = {
+            # Russian prefixes
+            'по', 'на', 'за', 'под', 'над', 'пред', 'при', 'про', 'раз', 'рас', 'с', 'со', 'вз', 'вс',
+            'вы', 'до', 'из', 'ис', 'низ', 'нис', 'о', 'об', 'обо', 'от', 'ото', 'па', 'пере', 'по',
+            'под', 'подъ', 'пра', 'пре', 'пред', 'предъ', 'при', 'про', 'раз', 'разъ', 'с', 'сверх',
+            'среди', 'су', 'у', 'чрез', 'через',
+            # English prefixes
+            'un', 're', 'in', 'im', 'il', 'ir', 'dis', 'en', 'em', 'non', 'in', 'im', 'over', 'mis',
+            'sub', 'pre', 'inter', 'fore', 'de', 'trans', 'super', 'semi', 'anti', 'mid', 'under'
+        }
+        
+        def is_valid_word(word: str) -> bool:
+            """Check if a word appears to be a valid word in any language."""
+            # Very short words are likely valid
+            if len(word) <= 2:
+                return True
+                
+            word_lower = word.lower()
+            
+            # Check for common word patterns
+            has_common_ending = any(word_lower.endswith(ending) for ending in common_endings)
+            has_common_beginning = any(word_lower.startswith(begin) for begin in common_beginnings)
+            
+            # Check for mixed case within word (excluding first letter)
+            has_mid_caps = any(c.isupper() for c in word[1:]) and not word.isupper()
+            
+            # Check for mixed scripts (Cyrillic + Latin)
+            has_cyrillic = any('а' <= c.lower() <= 'я' or c in 'ёЁ' for c in word)
+            has_latin = any('a' <= c.lower() <= 'z' for c in word)
+            has_mixed_script = has_cyrillic and has_latin
+            
+            # Check for repeated characters (like 'aaaa' or 'пррривет')
+            has_repeats = any(match.group(0) for match in re.finditer(r'(.)\1{2,}', word))
+            
+            # A word is valid if:
+            # 1. It has a common ending AND beginning, OR
+            # 2. It's not mixed script AND has no mid-caps AND no character repeats
+            return (
+                (has_common_ending and has_common_beginning) or
+                (not has_mixed_script and not has_mid_caps and not has_repeats)
+            )
+        
+        # Count valid and invalid words
+        valid_words = sum(1 for word in words if is_valid_word(word))
+        valid_ratio = valid_words / len(words)
+        
+        # Consider text as gibberish if less than 70% of words are valid
+        return valid_ratio < 0.7
+        
     def load_documents(self) -> List[Dict[str, Any]]:
         """Load documents from the data directory."""
         documents = []
+        skipped_count = 0
         print(f"Looking for documents in: {self.data_dir.absolute()}")
         
         # List all files in the data directory
@@ -87,10 +169,17 @@ class DocumentIndexer:
         for file_path in files:
             print(f"Loading document: {file_path.name}")
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
+                with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                     content = f.read()
                     if not content.strip():
                         print(f"  Warning: {file_path.name} is empty")
+                        skipped_count += 1
+                        continue
+                        
+                    # Check for gibberish/non-words in the text
+                    if self.is_gibberish(content):
+                        print(f"  Warning: {file_path.name} appears to contain gibberish and will be skipped")
+                        skipped_count += 1
                         continue
                         
                     documents.append({
@@ -104,7 +193,7 @@ class DocumentIndexer:
             except Exception as e:
                 print(f"  Error loading {file_path.name}: {str(e)}")
                 
-        print(f"Successfully loaded {len(documents)} documents.")
+        print(f"Loaded {len(documents)} documents. Skipped {skipped_count} documents due to being empty or containing broken text.")
         return documents
     
     def chunk_documents(self, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -327,25 +416,23 @@ class DocumentIndexer:
     
     def cleanup_chromadb(self):
         """
-        Clean up ChromaDB collection by deleting all existing data.
-        This ensures we start with a clean state for each indexing run.
+        Delete all collections in ChromaDB to completely reset the database.
         """
         try:
-            # Get or create the collection
-            collection = self.chroma_client.get_or_create_collection(
-                name="documents",
-                metadata={"hnsw:space": "cosine"}
-            )
+            # Получаем список всех коллекций
+            collections = self.chroma_client.list_collections()
             
-            # Delete all documents in the collection
-            collection.delete(where={"$exists": "id"})
-            print("Cleaned up existing data from ChromaDB")
+            # Удаляем каждую коллекцию
+            for coll in collections:
+                self.chroma_client.delete_collection(name=coll.name)
+            
+            print("All ChromaDB collections have been deleted.")
             return True
-            
+        
         except Exception as e:
             print(f"Error cleaning up ChromaDB: {str(e)}")
             return False
-    
+
     def run(self, n_clusters: int = 5) -> List[Dict[str, Any]]:
         """
         Run the full document indexing pipeline.
