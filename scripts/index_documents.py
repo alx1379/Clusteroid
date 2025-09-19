@@ -8,9 +8,11 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Union, Tuple
 from sklearn.preprocessing import normalize
 from sentence_transformers import SentenceTransformer
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document as LangchainDocument
 from dotenv import load_dotenv
+
+# Import custom text splitter
+from semantic_splitter import SemanticTextSplitter
 
 # Import clustering components
 from clustering.factory import ClustererFactory, Clusterer
@@ -63,11 +65,11 @@ class DocumentIndexer:
         # Create database directory if it doesn't exist
         self.db_path.mkdir(parents=True, exist_ok=True)
         self.embedding_model = SentenceTransformer('intfloat/multilingual-e5-large')
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=50,
-            length_function=len,
-            add_start_index=True,
+        # Initialize semantic text splitter with paragraph-aware chunking
+        self.text_splitter = SemanticTextSplitter(
+            target_size=800,
+            min_size=400,
+            tolerance=200
         )
         
         # Initialize ChromaDB client
@@ -106,19 +108,40 @@ class DocumentIndexer:
         return documents
     
     def chunk_documents(self, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Split documents into chunks."""
+        """
+        Split documents into chunks using semantic text splitting.
+        
+        Args:
+            documents: List of documents to split
+            
+        Returns:
+            List of document chunks with metadata
+        """
         chunks = []
         for doc in documents:
-            doc_texts = self.text_splitter.split_text(doc['content'])
-            for i, text in enumerate(doc_texts):
-                chunks.append({
-                    'id': f"{doc['id']}_chunk{i}",
-                    'text': text,
-                    'source': doc['source'],
-                    'title': doc['title'],
-                    'chunk_index': i,
-                    'document_id': doc['id']
-                })
+            try:
+                # Split document into chunks using our semantic splitter
+                doc_texts = self.text_splitter.split_text(doc['content'])
+                
+                for i, text in enumerate(doc_texts):
+                    # Skip very small chunks (unless it's the only chunk from the document)
+                    if len(text.strip()) < 100 and i > 0 and len(doc_texts) > 1:
+                        continue
+                        
+                    chunks.append({
+                        'id': f"{doc['id']}_chunk{i}",
+                        'text': text,
+                        'source': doc['source'],
+                        'title': doc['title'],
+                        'chunk_index': i,
+                        'document_id': doc['id']
+                    })
+                    
+            except Exception as e:
+                print(f"Error processing document {doc.get('id', 'unknown')}: {str(e)}")
+                continue
+                
+        print(f"Split {len(documents)} documents into {len(chunks)} chunks")
         return chunks
     
     def generate_embeddings(self, texts: List[str]) -> np.ndarray:
